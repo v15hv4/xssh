@@ -4,6 +4,8 @@ use clap::Parser;
 use xssh::{Args, Sync, SSH};
 
 fn main() {
+    env_logger::init();
+
     let args = Args::parse();
 
     // sync hosts from source

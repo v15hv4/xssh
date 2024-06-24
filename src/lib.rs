@@ -1,6 +1,10 @@
 mod constants;
 
+use rayon::prelude::*;
+
 use clap::Parser;
+use expanduser::expanduser;
+use log::{error, info, warn};
 use serde::Deserialize;
 
 use std::io::Write;
@@ -62,13 +66,11 @@ pub struct SSHHost {
 }
 impl SSHHost {
     pub fn new(hostname: String, ip: String, user: Option<String>) -> Self {
-        // infer username if not provided
+        // detect username if not provided
         if user.is_none() {
-            return Self {
-                hostname,
-                user: Self::infer_user(&ip).to_string(),
-                ip,
-            };
+            info!("Inferring user for '{hostname}' ({ip})...");
+            let user = Self::infer_user(&ip).to_string();
+            return Self { hostname, user, ip };
         }
 
         Self {
@@ -79,29 +81,42 @@ impl SSHHost {
     }
 
     pub fn infer_user(ip: &str) -> &str {
+        let default = constants::SSH_USERS.last().unwrap();
+
         for user in constants::SSH_USERS {
-            let ssh_args = format!("-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=true -Cq {user}@{ip} exit").split(" ").map(|i| i.to_string()).collect::<Vec<String>>();
-            let status = Command::new("ssh")
-                .args(ssh_args)
+            let timeout_args: Vec<String> =
+                format!("-k {} {}", constants::WAIT_KILL, constants::WAIT_TERM)
+                    .split(" ")
+                    .map(|i| i.to_string())
+                    .collect();
+            let ssh_args: Vec<String> = 
+                format!("ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=true -Cq {}@{} exit", user, ip)
+                    .split(" ")
+                    .map(|i| i.to_string())
+                    .collect();
+            let cmd_args: Vec<String> = timeout_args.into_iter().chain(ssh_args.into_iter()).collect();
+            let status = Command::new("timeout")
+                .args(cmd_args)
                 .status()
                 .expect("Failed to execute ssh command!");
             if status.code().unwrap() == 0 {
+                info!("Detected username: {user}");
                 return user;
             }
         }
 
-        constants::SSH_USERS.last().unwrap()
+        info!("Unable to detect username, defaulting to: {default}");
+        default
     }
 }
 impl ToString for SSHHost {
     fn to_string(&self) -> String {
-        format!(
-            r#"
+        format!(r#"
 Host {}
     HostName {}
     User {}
-
-            "#,
+    StrictHostKeyChecking no
+"#,
             self.hostname, self.ip, self.user
         )
     }
@@ -117,6 +132,7 @@ impl SSHConfig {
     pub fn load(filename: String) -> Self {
         // TODO: read config file
         let hosts = HashMap::new();
+        info!("Loaded config file with {} hosts.", hosts.len());
 
         Self { filename, hosts }
     }
@@ -127,14 +143,16 @@ impl SSHConfig {
             .write(true)
             .append(true)
             .create(true)
-            .open(&self.filename)
+            .open(expanduser(&self.filename).unwrap())
             .unwrap();
 
         for (hostname, host) in &self.hosts {
-            if let Err(e) = write!(file, "{}", host.to_string().trim()) {
-                eprintln!("Error writing {hostname} to file:  {}", e)
+            if let Err(e) = write!(file, "{}", host.to_string()) {
+                error!("Error writing {hostname} to file:  {}", e)
             }
         }
+
+        info!("Saved hosts to config file.");
     }
 
     // add host to config
@@ -142,11 +160,13 @@ impl SSHConfig {
         // do nothing if the hostname already exists and
         // the user doesn't want to overwrite
         if self.hosts.contains_key(&host.hostname) && !overwrite {
-            println!("'{}' exists in the config, skipping...", host.hostname);
+            warn!("'{}' exists in the config, skipping...", host.hostname);
             return;
         }
 
         self.hosts.insert(host.hostname.clone(), host);
+
+        info!("Added host to config.");
     }
 
     // list hostnames in config
@@ -180,7 +200,7 @@ impl Tailscale {
         let tailscale_json: serde_json::Value =
             serde_json::from_str(&tailscale_jsonstr).expect("Improperly formatted JSON!");
 
-        // fetch peer list
+        // fetch servers from peer list
         let peers: HashMap<String, TailscalePeer> =
             serde_json::from_value(tailscale_json.get("Peer").unwrap().to_owned()).unwrap();
         let peers: Vec<TailscalePeer> = peers
@@ -192,6 +212,8 @@ impl Tailscale {
                     .is_some_and(|v| v.contains(&"tag:server".to_string()))
             })
             .collect();
+
+        info!("Loaded {} peers from Tailscale.", peers.len());
 
         Self { peers }
     }
@@ -208,18 +230,21 @@ impl Sync {
 
     // sync hosts from tailscale
     pub fn tailscale(&self) {
+        info!("Syncing hosts from Tailscale...");
+
         let peers: Vec<TailscalePeer> = Tailscale::new().peers;
 
-        // TODO: parallelize
+        // map peers to hosts
         let hosts: Vec<SSHHost> = peers
-            .into_iter()
-            .map(|p| SSHHost::new(p.hostname, p.ips[0].clone(), None))
+            .par_iter()
+            .map(|p| SSHHost::new(p.hostname.clone(), p.ips[0].clone(), None))
             .collect();
 
         let mut config = SSHConfig::load(constants::SSH_CONFIG_FILE.to_string());
         for host in hosts {
             config.add(host, self.overwrite);
         }
+
         config.save();
     }
 }
