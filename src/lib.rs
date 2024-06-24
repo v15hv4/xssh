@@ -1,11 +1,11 @@
 mod constants;
 
-use rayon::prelude::*;
-
 use clap::Parser;
 use expanduser::expanduser;
 use log::{error, info, warn};
 use serde::Deserialize;
+use indicatif::ParallelProgressIterator;
+use rayon::iter::{ParallelIterator, IntoParallelRefIterator};
 
 use std::io::Write;
 use std::{collections::HashMap, fs::OpenOptions, process::Command};
@@ -168,11 +168,6 @@ impl SSHConfig {
 
         info!("Added host to config.");
     }
-
-    // list hostnames in config
-    pub fn list(&self) -> Vec<String> {
-        self.hosts.clone().into_keys().collect()
-    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -230,13 +225,14 @@ impl Sync {
 
     // sync hosts from tailscale
     pub fn tailscale(&self) {
-        info!("Syncing hosts from Tailscale...");
+        println!("Syncing hosts from Tailscale...");
 
         let peers: Vec<TailscalePeer> = Tailscale::new().peers;
 
         // map peers to hosts
         let hosts: Vec<SSHHost> = peers
             .par_iter()
+            .progress_count(peers.len() as u64)
             .map(|p| SSHHost::new(p.hostname.clone(), p.ips[0].clone(), None))
             .collect();
 
@@ -246,5 +242,7 @@ impl Sync {
         }
 
         config.save();
+
+        println!("Updated SSH config.");
     }
 }
