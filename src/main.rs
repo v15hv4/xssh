@@ -1,5 +1,3 @@
-// use xssh::{construct_ssh_args, spawn_ssh, sync_tailscale, Args};
-
 use clap::Parser;
 use xssh::{Args, Sync, SSH};
 
