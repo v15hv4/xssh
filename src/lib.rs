@@ -12,14 +12,14 @@ pub struct Args {
     #[arg(index = 1)]
     pub destination: Option<String>,
 
-    #[arg(long, short, default_value_t = String::new())]
-    pub tmux: String,
+    #[arg(long, short)]
+    pub tmux: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub save: bool,
 
-    #[arg(long, default_value_t = String::new(), conflicts_with = "destination")]
-    pub sync: String,
+    #[arg(long, conflicts_with = "destination")]
+    pub sync: Option<String>,
 
     #[arg(long, default_value_t = false)]
     pub overwrite: bool,
@@ -30,11 +30,11 @@ pub struct SSH {
     args: Vec<String>,
 }
 impl SSH {
-    pub fn new(destination: String, tmux: String) -> Self {
+    pub fn new(destination: String, tmux: Option<String>) -> Self {
         let mut args = vec![destination];
 
         // spawn into tmux session on the remote destination
-        if !tmux.is_empty() {
+        if let Some(tmux) = tmux {
             format!("-t tmux -u new -As{}", tmux)
                 .split(" ")
                 .map(|i| i.to_string())
@@ -54,7 +54,7 @@ impl SSH {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SSHHost {
     pub hostname: String,
     pub user: String,
@@ -113,15 +113,15 @@ pub struct SSHConfig {
     pub hosts: HashMap<String, SSHHost>,
 }
 impl SSHConfig {
+    // load existing ssh config file
     pub fn load(filename: String) -> Self {
         // TODO: read config file
+        let hosts = HashMap::new();
 
-        Self {
-            filename,
-            hosts: HashMap::new(),
-        }
+        Self { filename, hosts }
     }
 
+    // save current config to file
     pub fn save(&self) {
         let mut file = OpenOptions::new()
             .write(true)
@@ -137,6 +137,7 @@ impl SSHConfig {
         }
     }
 
+    // add host to config
     pub fn add(&mut self, host: SSHHost, overwrite: bool) {
         // do nothing if the hostname already exists and
         // the user doesn't want to overwrite
@@ -146,6 +147,11 @@ impl SSHConfig {
         }
 
         self.hosts.insert(host.hostname.clone(), host);
+    }
+
+    // list hostnames in config
+    pub fn list(&self) -> Vec<String> {
+        self.hosts.clone().into_keys().collect()
     }
 }
 
@@ -165,11 +171,11 @@ pub struct Tailscale {
 }
 impl Tailscale {
     pub fn new() -> Self {
+        // parse tailscale CLI output
         let tailscale_output = Command::new("tailscale")
             .args(["status", "--json"])
             .output()
             .unwrap();
-
         let tailscale_jsonstr = String::from_utf8(tailscale_output.stdout).unwrap();
         let tailscale_json: serde_json::Value =
             serde_json::from_str(&tailscale_jsonstr).expect("Improperly formatted JSON!");
@@ -177,7 +183,6 @@ impl Tailscale {
         // fetch peer list
         let peers: HashMap<String, TailscalePeer> =
             serde_json::from_value(tailscale_json.get("Peer").unwrap().to_owned()).unwrap();
-
         let peers: Vec<TailscalePeer> = peers
             .into_iter()
             .map(|(_, v)| v)
@@ -201,6 +206,7 @@ impl Sync {
         Self { overwrite }
     }
 
+    // sync hosts from tailscale
     pub fn tailscale(&self) {
         let peers: Vec<TailscalePeer> = Tailscale::new().peers;
 

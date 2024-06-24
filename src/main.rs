@@ -7,9 +7,9 @@ fn main() {
     let args = Args::parse();
 
     // sync hosts from source
-    if !args.sync.is_empty() {
+    if args.sync.is_some() {
         let sync = Sync::new(args.overwrite);
-        match args.sync.as_str() {
+        match args.sync.unwrap_or(String::new()).as_str() {
             "tailscale" => sync.tailscale(),
             _ => println!("Invalid sync source!"),
         }
