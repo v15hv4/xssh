@@ -172,12 +172,17 @@ impl SSHConfig {
 
 #[derive(Deserialize, Debug)]
 pub struct TailscalePeer {
-    #[serde(rename = "HostName")]
-    pub hostname: String,
+    #[serde(rename = "DNSName")]
+    pub dnsname: String,
     #[serde(rename = "TailscaleIPs")]
     pub ips: Vec<String>,
     #[serde(rename = "Tags")]
     pub tags: Option<Vec<String>>,
+}
+impl TailscalePeer {
+    pub fn hostname(&self) -> String {
+        self.dnsname.split(".").collect::<Vec<&str>>()[0].to_string()
+    }
 }
 
 #[derive(Debug)]
@@ -233,7 +238,7 @@ impl Sync {
         let hosts: Vec<SSHHost> = peers
             .par_iter()
             .progress_count(peers.len() as u64)
-            .map(|p| SSHHost::new(p.hostname.clone(), p.ips[0].clone(), None))
+            .map(|p| SSHHost::new(p.hostname(), p.ips[0].clone(), None))
             .collect();
 
         let mut config = SSHConfig::load(constants::SSH_CONFIG_FILE.to_string());
